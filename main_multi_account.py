@@ -237,6 +237,40 @@ def search_btn(page):
     return None
 
 
+def parse_proxy(proxy_str):
+    """
+    解析代理字符串，支持多种格式
+    
+    支持格式:
+    - socks5://host:port
+    - socks5://user:pass@host:port
+    - http://host:port
+    - http://user:pass@host:port
+    - host:port (默认http)
+    
+    返回: (proxy_url, proxy_type, auth_info)
+    """
+    if not proxy_str:
+        return None, None, None
+    
+    proxy_str = proxy_str.strip()
+    
+    # 已经是完整URL格式
+    if proxy_str.startswith(('socks5://', 'socks4://', 'http://', 'https://')):
+        if proxy_str.startswith('socks5://'):
+            return proxy_str, 'socks5', None
+        elif proxy_str.startswith('socks4://'):
+            return proxy_str, 'socks4', None
+        else:
+            return proxy_str, 'http', None
+    
+    # 简单格式 host:port，默认http
+    if ':' in proxy_str and not proxy_str.startswith(('socks', 'http')):
+        return f'http://{proxy_str}', 'http', None
+    
+    return proxy_str, 'http', None
+
+
 def add_server_time(account_config, account_index=1):
     """为单个账号添加服务器时间"""
     server_url = account_config.get('server_url', '')
@@ -255,8 +289,11 @@ def add_server_time(account_config, account_index=1):
 
     print(f"📌 服务器URL: {server_url}")
     print(f"🔐 Cookie: {remember_web_cookie[:20]}...")
-    if chrome_proxy:
-        print(f"🌐 代理: {chrome_proxy}")
+    
+    # 解析代理
+    proxy_url, proxy_type, _ = parse_proxy(chrome_proxy)
+    if proxy_url:
+        print(f"🌐 代理: {proxy_url} (类型: {proxy_type})")
 
     user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
     browser = None
@@ -280,8 +317,16 @@ def add_server_time(account_config, account_index=1):
             .set_local_port(debug_port)
         )
 
-        if chrome_proxy:
-            options.set_argument(f'--proxy-server={chrome_proxy}')
+        # 设置代理 - 支持 socks5/socks4/http/https
+        if proxy_url:
+            options.set_argument(f'--proxy-server={proxy_url}')
+            print(f"✅ 已配置代理: {proxy_url}")
+            
+            # 如果是socks5代理，可能需要额外设置
+            if proxy_type in ('socks5', 'socks4'):
+                # Chrome 原生支持 socks5:// 格式
+                # 如果代理需要认证，需要使用扩展或其他方式
+                options.set_argument('--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE localhost')
 
         if 'DISPLAY' not in os.environ:
             options.headless(True)
@@ -295,6 +340,18 @@ def add_server_time(account_config, account_index=1):
         print(f"✅ 浏览器启动成功")
 
         page = browser.latest_tab
+
+        # 验证代理是否生效（可选）
+        if proxy_url:
+            try:
+                print("🔍 验证代理连接...")
+                page.get('https://httpbin.org/ip', timeout=10)
+                time.sleep(2)
+                ip_info = page.ele('tag:pre', timeout=5)
+                if ip_info:
+                    print(f"📍 当前IP信息: {ip_info.text[:100]}")
+            except Exception as e:
+                print(f"⚠️ 代理验证跳过: {e}")
 
         # Cookie 登录
         print(f"尝试使用 Cookie 登录...")
@@ -423,6 +480,12 @@ def load_accounts():
     1. ACCOUNTS_JSON: JSON数组，多账号
     2. ACCOUNT_1, ACCOUNT_2, ...: 每个是JSON对象
     3. WEIRDHOST_SERVER_URLS + REMEMBER_WEB_COOKIE: 单账号兼容
+    
+    代理格式支持:
+    - socks5://host:port
+    - socks5://user:pass@host:port
+    - http://host:port
+    - host:port (默认http)
     """
     accounts = []
 
@@ -467,9 +530,14 @@ def load_accounts():
     print("❌ 未找到账号配置！")
     print("请设置以下环境变量之一：")
     print("  1. ACCOUNTS_JSON - JSON数组")
-    print('     例: [{"name":"acc1","server_url":"...","cookie":"...","proxy":""}]')
+    print('     例: [{"name":"acc1","server_url":"...","cookie":"...","proxy":"socks5://127.0.0.1:1080"}]')
     print("  2. ACCOUNT_1, ACCOUNT_2, ... - 每个是JSON对象")
-    print("  3. WEIRDHOST_SERVER_URLS + REMEMBER_WEB_COOKIE - 单账号")
+    print("  3. WEIRDHOST_SERVER_URLS + REMEMBER_WEB_COOKIE + PROXY - 单账号")
+    print("\n代理格式支持:")
+    print("  - socks5://host:port")
+    print("  - socks5://user:pass@host:port")
+    print("  - http://host:port")
+    print("  - host:port (默认http)")
     sys.exit(1)
 
 

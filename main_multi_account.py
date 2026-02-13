@@ -39,11 +39,13 @@ parser.add_argument('-k', '--keep', action='store_true', help='启用保留模�
 parser.add_argument('-d', '--debug', action='store_true', help='启用调试模式')
 iargs = parser.parse_args()
 
+
 def safe_ele(obj, selector, timeout=5):
     try:
         return obj.ele(selector, timeout=timeout)
     except:
         return None
+
 
 def safe_shadow_root(ele):
     try:
@@ -51,11 +53,13 @@ def safe_shadow_root(ele):
     except:
         return None
 
+
 def safe_get_frame(shadow, index):
     try:
         return shadow.get_frame(index)
     except:
         return None
+
 
 def solve_turnstile(page):
     print('waiting for turnstile')
@@ -95,6 +99,7 @@ def solve_turnstile(page):
         return True
     return False
 
+
 def check_action_success(page):
     success = page.ele("x://h2[contains(text(), '성공!')]", timeout=10)
     if success:
@@ -107,6 +112,7 @@ def check_action_success(page):
         return False
     print("⚠️ 按钮已点击，但未检测到明确的成功或错误提示。")
     return False
+
 
 def capture_screenshot(file_name=None, save_dir='screenshots', page=None, account_name=""):
     os.makedirs(save_dir, exist_ok=True)
@@ -124,6 +130,7 @@ def capture_screenshot(file_name=None, save_dir='screenshots', page=None, accoun
     except Exception as e:
         print(f"⚠️ 截图失败: {e}")
 
+
 def check_element(desc, element, exit_on_fail=True):
     if element:
         print(f'✓ {desc}: {element}')
@@ -132,31 +139,103 @@ def check_element(desc, element, exit_on_fail=True):
         print(f'✗ {desc}: 获取失败')
         return False
 
+
 def search_btn(page):
-    add_button_txt = "시간추가"
-    print(f"🔍 正在查找 '{add_button_txt}' 按钮...")
+    """增强版按钮查找"""
+    print(f"🔍 正在查找续期按钮...")
+    
+    # 等待页面加载
+    time.sleep(3)
+    
+    # 先尝试等待容器
     try:
-        page.wait.ele_displayed('//div[contains(@class, "RenewBox2")]', timeout=10)
+        page.wait.ele_displayed('//div[contains(@class, "RenewBox")]', timeout=10)
     except:
-        print("⚠️ 等待 RenewBox2 容器超时，继续尝试查找...")
+        print("⚠️ 等待 RenewBox 容器超时，继续尝试...")
 
     selectors = [
-        '//button[@color="primary"]',
-        '//button[contains(@class, "Button__ButtonStyle-sc-1qu1gou-0")]',
-        '//div[contains(@class, "RenewBox2")]//button[1]',
-        f'//button[contains(text(), "{add_button_txt}")]',
+        # 1. 精确文本匹配（无空格）
+        '//button[text()="시간추가"]',
+        # 2. 精确文本匹配（有空格）
+        '//button[text()="시간 추가"]',
+        # 3. 包含文本
+        '//button[contains(text(), "시간추가")]',
+        '//button[contains(text(), "시간 추가")]',
+        # 4. 包含"시간"的按钮
         '//button[contains(., "시간")]',
+        # 5. 通过颜色属性
+        '//button[@color="primary"]',
+        # 6. RenewBox 内的第一个按钮
+        '//div[contains(@class, "RenewBox")]//button',
+        '//div[contains(@class, "RenewBox2")]//button',
+        # 7. 通过 class 名称
+        '//button[contains(@class, "Button__ButtonStyle")]',
+        '//button[contains(@class, "sc-")]',
+        # 8. 所有 primary 类型按钮
+        '//button[contains(@class, "primary")]',
+        # 9. section 内的按钮
+        '//section//button[1]',
+        # 10. 任意包含韩文"추가"(添加)的按钮
+        '//button[contains(., "추가")]',
     ]
+    
     for i, selector in enumerate(selectors, 1):
         try:
-            btn = page.ele(selector, timeout=3)
+            btn = page.ele(selector, timeout=2)
             if btn:
-                print(f"✅ 通过选择器 #{i} 找到按钮: {selector}")
-                return btn
+                try:
+                    text = btn.text or btn.attr('aria-label') or ''
+                    print(f"✅ 选择器 #{i} 找到按钮: {selector}")
+                    print(f"   按钮文本: '{text}'")
+                    return btn
+                except:
+                    print(f"✅ 选择器 #{i} 找到按钮: {selector}")
+                    return btn
         except:
             continue
-    print(f"❌ 未找到 '{add_button_txt}' 按钮（已尝试 {len(selectors)} 种方法）")
+    
+    # 最后尝试：获取页面所有按钮并打印调试信息
+    print("\n🔍 尝试获取页面所有按钮进行分析...")
+    try:
+        all_buttons = page.eles('//button', timeout=5)
+        if all_buttons:
+            print(f"📋 页面共有 {len(all_buttons)} 个按钮:")
+            for idx, b in enumerate(all_buttons[:10], 1):
+                try:
+                    txt = b.text or ''
+                    cls = b.attr('class') or ''
+                    print(f"   [{idx}] text='{txt[:30]}' class='{cls[:50]}'")
+                    if '시간' in txt or '추가' in txt or 'time' in txt.lower():
+                        print(f"   ⬆️ 这个按钮可能是目标！")
+                        return b
+                except:
+                    continue
+        else:
+            print("❌ 页面没有找到任何按钮")
+    except Exception as e:
+        print(f"❌ 获取按钮列表失败: {e}")
+    
+    # 检查是否在 iframe 中
+    print("\n🔍 检查是否存在 iframe...")
+    try:
+        iframes = page.eles('//iframe', timeout=3)
+        if iframes:
+            print(f"📋 发现 {len(iframes)} 个 iframe")
+            for idx, iframe in enumerate(iframes, 1):
+                try:
+                    frame = page.get_frame(idx)
+                    btn = frame.ele('//button[contains(., "시간")]', timeout=2)
+                    if btn:
+                        print(f"✅ 在 iframe #{idx} 中找到按钮")
+                        return btn
+                except:
+                    continue
+    except:
+        pass
+    
+    print(f"❌ 未找到续期按钮（已尝试 {len(selectors)} 种选择器 + 全量扫描）")
     return None
+
 
 def add_server_time(account_config, account_index=1):
     """为单个账号添加服务器时间"""
@@ -251,6 +330,9 @@ def add_server_time(account_config, account_index=1):
                 return {'name': account_name, 'success': False, 'error': '登录失败'}
 
         print(f"✅ 已进入服务器页面: {page.url}")
+        
+        # 截图当前页面状态
+        capture_screenshot("page_loaded.png", page=page, account_name=account_name)
 
         # 查找并点击按钮
         btn = search_btn(page)
@@ -332,6 +414,7 @@ def add_server_time(account_config, account_index=1):
             except:
                 pass
 
+
 def load_accounts():
     """
     从环境变量加载账号配置
@@ -389,6 +472,7 @@ def load_accounts():
     print("  3. WEIRDHOST_SERVER_URLS + REMEMBER_WEB_COOKIE - 单账号")
     sys.exit(1)
 
+
 def save_results(results):
     try:
         with open('results.json', 'w', encoding='utf-8') as f:
@@ -396,6 +480,7 @@ def save_results(results):
         print("📝 结果已保存到 results.json")
     except Exception as e:
         print(f"⚠️ 保存结果失败: {e}")
+
 
 def main():
     print(f"\n{'#'*60}")
@@ -444,6 +529,7 @@ def main():
         traceback.print_exc()
         if not iargs.keep:
             sys.exit(1)
+
 
 if __name__ == "__main__":
     if iargs.debug:

@@ -1,0 +1,149 @@
+# add_time_multi_account.yml
+name: 多账号自动续期
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '18 2 */3 * *'
+
+jobs:
+  multi_account_renewal:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Install Google Chrome
+        run: |
+          sudo apt-get update
+          sudo apt install -y \
+              tigervnc-standalone-server \
+              openbox \
+              websockify \
+              novnc \
+              git wget \
+              fonts-dejavu-core \
+              net-tools
+          wget -O google-chrome-stable_current_amd64.deb https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_143.0.7499.169-1_amd64.deb
+          sudo apt install -y --allow-downgrades ./google-chrome-stable_current_amd64.deb
+          sudo apt install -y language-pack-zh-hans fonts-wqy-zenhei fonts-wqy-microhei
+          google-chrome --version
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Export secrets to env
+        uses: oNaiPs/secrets-to-env-action@v1
+        with:
+          secrets: ${{ toJSON(secrets) }}
+
+      - name: Start noVNC
+        run: sudo bash runnovnc.sh
+
+      - name: Wait for noVNC
+        run: |
+          for i in {1..60}; do
+            nc -z localhost 8080 && echo "noVNC 已启动" && break
+            echo "等待中 ($i)..."
+            sleep 1
+          done
+
+      - name: Run Multi-Account Renewal Script
+        id: run_script
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          export TMPDIR="$GITHUB_WORKSPACE/.tmp"
+          export DISPLAY=:1
+          python main_multi_account.py || true
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: results.json
+
+      - name: Read results
+        if: always()
+        id: read_results
+        run: |
+          if [ -f results.json ]; then
+            SUCCESS_COUNT=$(jq '[.[] | select(.success==true)] | length' results.json)
+            FAIL_COUNT=$(jq '[.[] | select(.success==false)] | length' results.json)
+            TOTAL_COUNT=$(jq 'length' results.json)
+            DETAILS=$(jq -r '.[] | "\(if .success then "✅" else "❌" end) \(.name)\(if .error then " - \(.error)" else "" end)"' results.json)
+
+            echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
+            echo "fail_count=$FAIL_COUNT" >> $GITHUB_OUTPUT
+            echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+            {
+              echo "details<<EOF"
+              echo "$DETAILS"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "success_count=0" >> $GITHUB_OUTPUT
+            echo "fail_count=0" >> $GITHUB_OUTPUT
+            echo "total_count=0" >> $GITHUB_OUTPUT
+            echo "details=未找到结果文件" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Telegram - All Success
+        if: always() && steps.read_results.outputs.fail_count == '0' && steps.read_results.outputs.total_count != '0'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ✅ 全部续期成功！
+            ${{ steps.read_results.outputs.details }}
+            ✅ ${{ steps.read_results.outputs.success_count }}/${{ steps.read_results.outputs.total_count }}
+            🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send Telegram - Partial
+        if: always() && steps.read_results.outputs.success_count != '0' && steps.read_results.outputs.fail_count != '0'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ⚠️ 部分续期失败
+            ${{ steps.read_results.outputs.details }}
+            ✅ ${{ steps.read_results.outputs.success_count }} ❌ ${{ steps.read_results.outputs.fail_count }} / ${{ steps.read_results.outputs.total_count }}
+            🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send Telegram - All Failed
+        if: always() && steps.read_results.outputs.success_count == '0' && steps.read_results.outputs.total_count != '0'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ❌ 全部续期失败！
+            ${{ steps.read_results.outputs.details }}
+            🚨 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send Telegram - Script Error
+        if: always() && steps.read_results.outputs.total_count == '0'
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🚨 脚本执行错误，未生成结果文件
+            🔧 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
